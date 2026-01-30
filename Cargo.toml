@@ -1,0 +1,11 @@
+[package]
+name = "stoml-args"
+version = "0.1.0"
+description = "Commandline arg parser with TOML config support"
+authors = ["parazyd <parazyd@dyne.org>"]
+repository = "https://github.com/parazyd/stoml-args"
+license = "GPL-3.0-only"
+edition = "2024"
+
+[dependencies]
+stoml = "0.1.0"

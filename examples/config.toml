@@ -1,0 +1,18 @@
+# Sample configuration for the server example
+# CLI arguments will override these values
+
+[server]
+host = "127.0.0.1"
+port = 3000
+workers = 8
+
+[logging]
+file = "/var/log/myserver.log"
+
+[tls]
+enabled = true
+cert = "/etc/ssl/certs/server.crt"
+key = "/etc/ssl/private/server.key"
+
+# Features can be an array
+features = ["auth", "metrics", "cache"]
