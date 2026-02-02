@@ -4,15 +4,17 @@ stoml-args
 A lightweight CLI argument parser for Rust with seamless TOML configuration
 support. Zero external dependencies beyond [`stoml`](https://github.com/parazyd/stoml)
 
+Documentation on [docs.rs](https://docs.rs/stoml-args).
+
 ## Features
 
 - **Layered Configuration**: CLI args → TOML config → Defaults
+- **Config Loading**: Built-in `-c`/`--config` flag with pre-parsing
 - **Type-safe**: Integer, Float, String, Boolean, Array, and Count types
 - **Optional Args**: Support for truly optional arguments (no default, returns `None`)
 - **Flexible Flags**: Short (`-v`), long (`--verbose`), combined (`-vvv`), with values (`-o file`, `-ofile`, `--output=file`)
 - **Positional Arguments**: Required, optional, and variadic
 - **Auto-generated Help**: `--help` and `--version` flags
-- **No serde**: Direct integration with `stoml` types
 
 ## Quick Start
 
@@ -20,74 +22,85 @@ support. Zero external dependencies beyond [`stoml`](https://github.com/parazyd/
 use stoml_args::{args, arg, ArgType};
 
 fn main() {
-    let matches = args("myapp")
-        .version("1.0.0")
-        .about("My application")
-        .arg(arg("config")
-            .short('c')
-            .long("config")
-            .help("Config file path"))
-        .arg(arg("port")
-            .short('p')
-            .long("port")
-            .arg_type(ArgType::Integer)
-            .default(8080i64)
-            .help("Port number"))
-        .arg(arg("verbose")
-            .short('v')
-            .long("verbose")
-            .flag()
-            .help("Enable verbose output"))
-        .parse()
-        .unwrap_or_else(|e| e.exit());
-
-    let port = matches.get_integer("port").unwrap();
-    let verbose = matches.get_bool("verbose");
-    
-    println!("Port: {}, Verbose: {}", port, verbose);
-}
-```
-
-## Layered Configuration
-
-```rust
-use stoml_args::{args, arg, ArgType};
-
-fn main() {
-    // Define arguments with TOML key mappings
     let arg_defs = vec![
-        arg("host")
-            .long("host")
-            .default("0.0.0.0")
-            .toml_key("server.host"),  // Maps to [server] host = "..."
         arg("port")
             .short('p')
             .long("port")
             .arg_type(ArgType::Integer)
             .default(8080i64)
             .toml_key("server.port"),
+        arg("verbose")
+            .short('v')
+            .flag(),
     ];
 
-    let matches = args("server")
+    let matches = args("myapp")
+        .version("1.0.0")
+        .config_arg_default("config.toml")  // Auto -c/--config
         .arg(arg_defs[0].clone())
         .arg(arg_defs[1].clone())
         .parse()
         .unwrap_or_else(|e| e.exit())
-        .with_toml_file_optional("config.toml")  // Load TOML (optional)
-        .unwrap()
-        .with_defaults(&arg_defs); // Apply defaults
+        .with_defaults(&arg_defs);
 
-    // CLI wins over TOML, TOML wins over defaults
-    let host = matches.get_string("host").unwrap();
+    // TOML is automatically loaded and merged
     let port = matches.get_integer("port").unwrap();
+    println!("Port: {}", port);
 }
 ```
 
-With `config.toml`:
-```toml
-[server]
-host = "127.0.0.1"
-port = 3000
+## Automatic Config File Loading
+
+Config files are handled automatically with pre-parsing:
+
+```rust
+let matches = args("myapp")
+    .config_arg()                        // Adds -c/--config flag
+    // OR
+    .config_arg_default("config.toml")   // Also tries config.toml if -c not given
+    .arg(arg("port").toml_key("port"))
+    .parse()?;
+
+// TOML is loaded. CLI values override TOML values.
+```
+
+**How it works:**
+1. Before full parsing, `-c`/`--config` is extracted
+2. The TOML file is loaded
+3. Full argument parsing happens
+4. TOML values fill in any gaps (CLI takes precedence)
+
+**Supported formats:**
+```bash
+myapp -c config.toml
+myapp -cconfig.toml
+myapp --config config.toml
+myapp --config=config.toml
+```
+
+## Layered Configuration (Manual)
+
+If you need more control, you can still load TOML manually:
+
+```rust
+let arg_defs = vec![
+    arg("host")
+        .long("host")
+        .default("0.0.0.0")
+        .toml_key("server.host"),
+    arg("port")
+        .short('p')
+        .arg_type(ArgType::Integer)
+        .default(8080i64)
+        .toml_key("server.port"),
+];
+
+let matches = args("server")
+    .arg(arg_defs[0].clone())
+    .arg(arg_defs[1].clone())
+    .parse()?
+    .with_toml_file_optional("config.toml")?
+    .with_defaults(&arg_defs);
 ```
 
 Priority order (highest to lowest):
@@ -137,24 +150,20 @@ arg("include")
 
 ### Optional Arguments Without Defaults
 
-Arguments are optional by default. If not provided and no default is set,
-getter methods return `None`:
+Arguments are optional by default. If not provided and no default is set, getter methods return `None`:
 
 ```rust
 let matches = args("myapp")
-    .arg(arg("config").short('c').optional())  // explicit optional
-    .arg(arg("output").short('o'))              // implicit optional (default)
-    .parse()
-    .unwrap_or_else(|e| e.exit());
+    .arg(arg("output").short('o').optional())  // explicit
+    .parse()?;
 
 // Returns None if not provided
-if let Some(config) = matches.get_string("config") {
-    println!("Config: {}", config);
+if let Some(output) = matches.get_string("output") {
+    println!("Output: {}", output);
 }
 
 // For optional booleans, use get_bool_opt()
-let debug = matches.get_bool_opt("debug");  // Option<bool>
-match debug {
+match matches.get_bool_opt("debug") {
     Some(true) => println!("Debug enabled"),
     Some(false) => println!("Debug disabled"),
     None => println!("Debug not specified"),
@@ -190,6 +199,21 @@ args("cp")
 | `toml_key(s)` | Set TOML key path (e.g., `"server.port"`) |
 | `value_name(s)` | Set placeholder in help (e.g., `"FILE"`) |
 | `variadic()` | Accept multiple values (positional only) |
+
+### Args Builder Methods
+
+| Method | Description |
+|--------|-------------|
+| `new(name)` | Create new parser |
+| `version(v)` | Set program version |
+| `about(s)` | Set program description |
+| `arg(a)` | Add an argument |
+| `config_arg()` | Enable `-c`/`--config` flag |
+| `config_arg_default(path)` | Enable config flag with default path |
+| `disable_help()` | Disable auto `--help` |
+| `disable_version()` | Disable auto `--version` |
+| `parse()` | Parse from `std::env::args()` |
+| `parse_from(args)` | Parse from custom args |
 
 ### Matches Methods
 
@@ -230,6 +254,10 @@ args("cp")
 -abc                # same as -a -b -c
 -vvv                # count: 3
 
+# Config file
+-c config.toml      # short
+--config=config.toml # long with equals
+
 # Positional
 myapp input.txt output.txt
 
@@ -241,17 +269,17 @@ myapp --flag -- -not-a-flag
 
 ```rust
 let matches = args("myapp")
-    .arg(arg("config").required())
+    .arg(arg("input").required())
     .parse();
 
 match matches {
     Ok(m) => { /* use matches */ }
     Err(e) if e.is_help() => {
-        println!("{}", e);  // Print help
+        println!("{}", e);
         std::process::exit(0);
     }
     Err(e) if e.is_version() => {
-        println!("{}", e);  // Print version
+        println!("{}", e);
         std::process::exit(0);
     }
     Err(e) => {
