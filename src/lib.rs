@@ -1,5 +1,6 @@
 mod error;
 mod parser;
+use parser::ArgParser;
 
 pub use error::{Error, Result};
 pub use stoml::{Array, Table, Value};
@@ -7,8 +8,6 @@ pub use stoml::{Array, Table, Value};
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
-
-use parser::ArgParser;
 
 /// The type of value an argument accepts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +22,7 @@ pub enum ArgType {
     Bool,
     /// Multiple values (can be specified multiple times)
     Array,
-    ///  A count (each occurrence increments, e.g., -vvv = 3)
+    /// A count (each occurrence increments, e.g., -vvv = 3)
     Count,
 }
 
@@ -94,7 +93,7 @@ impl Arg {
         }
     }
 
-    /// Set the short flag (e.g, 'v' for -v)
+    /// Set the short flag (e.g., 'v' for -v)
     pub fn short(mut self, c: char) -> Self {
         self.short = Some(c);
         self
@@ -191,6 +190,10 @@ pub struct Args {
     auto_help: bool,
     /// Whether to auto-add version flag
     auto_version: bool,
+    /// Whether to auto-add config file flag (-c/--config)
+    auto_config: bool,
+    /// Default config file path (used if -c/--config not provided)
+    default_config: Option<String>,
 }
 
 impl Args {
@@ -204,6 +207,8 @@ impl Args {
             positional_count: 0,
             auto_help: true,
             auto_version: true,
+            auto_config: false,
+            default_config: None,
         }
     }
 
@@ -241,6 +246,43 @@ impl Args {
         self
     }
 
+    /// Enable automatic config file flag (-c/--config)
+    ///
+    /// This adds a `-c`/`--config` argument that is parsed first, before other arguments.
+    /// If provided, the TOML file is loaded and merged automatically.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let matches = args("myapp")
+    ///     .config_arg()
+    ///     .arg(arg("port").default(8080i64).toml_key("server.port"))
+    ///     .parse()?;
+    /// // If user runs: myapp -c config.toml
+    /// // The TOML is already loaded and merged
+    /// ```
+    pub fn config_arg(mut self) -> Self {
+        self.auto_config = true;
+        self
+    }
+
+    /// Enable automatic config file flag with a default path
+    ///
+    /// Like `config_arg()`, but also tries to load from the default path
+    /// if `-c`/`--config` is not provided.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let matches = args("myapp")
+    ///     .config_arg_default("config.toml")
+    ///     .parse()?;
+    /// // Loads config.toml if it exists, even without -c flag
+    /// ```
+    pub fn config_arg_default(mut self, path: impl Into<String>) -> Self {
+        self.auto_config = true;
+        self.default_config = Some(path.into());
+        self
+    }
+
     /// Parse arguments from the command line
     pub fn parse(self) -> Result<Matches> {
         self.parse_from(env::args().skip(1).collect())
@@ -248,7 +290,24 @@ impl Args {
 
     /// Parse arguments from a given iterator
     pub fn parse_from(mut self, args: Vec<String>) -> Result<Matches> {
+        // Pre-scan for config file if auto_config is enabled
+        let config_table = if self.auto_config {
+            let config_path = self.extract_config_path(&args);
+            self.load_config_file(config_path.as_deref())?
+        } else {
+            None
+        };
+
         // Add auto flags
+        if self.auto_config {
+            self.args.push(
+                Arg::new("config")
+                    .short('c')
+                    .long("config")
+                    .help("Path to configuration file")
+                    .value_name("FILE"),
+            );
+        }
         if self.auto_help {
             self.args.push(
                 Arg::new("help")
@@ -258,7 +317,6 @@ impl Args {
                     .help("Print help information"),
             );
         }
-
         if self.auto_version && self.version.is_some() {
             self.args.push(
                 Arg::new("version")
@@ -280,7 +338,12 @@ impl Args {
             return Err(Error::Version(self.format_version()));
         }
 
-        // Check for missing required arguments (after help/version)
+        // Merge TOML config (CLI values take precedence since they're already in matches)
+        if let Some(table) = config_table {
+            matches.merge_toml(&table, "");
+        }
+
+        // Check for missing required arguments (after help/version and TOML merge)
         for arg in &self.args {
             if arg.required && !matches.values.contains_key(&arg.name) {
                 if arg.positional {
@@ -300,6 +363,63 @@ impl Args {
         matches.program_name = self.name;
 
         Ok(matches)
+    }
+
+    /// Extract config path from args without full parsing
+    fn extract_config_path(&self, args: &[String]) -> Option<String> {
+        let mut iter = args.iter().peekable();
+        while let Some(arg) = iter.next() {
+            // --config=path or --config path
+            if let Some(rest) = arg.strip_prefix("--config") {
+                if let Some(path) = rest.strip_prefix('=') {
+                    return Some(path.to_string());
+                } else if rest.is_empty() {
+                    return iter.next().cloned();
+                }
+            }
+            // -c path or -cpath
+            if let Some(rest) = arg.strip_prefix("-c") {
+                if rest.is_empty() {
+                    return iter.next().cloned();
+                } else {
+                    return Some(rest.to_string());
+                }
+            }
+            // Handle combined flags like -vc path (config is last)
+            if arg.starts_with('-') && !arg.starts_with("--") && arg.contains('c') {
+                let chars: Vec<char> = arg[1..].chars().collect();
+                if let Some(pos) = chars.iter().position(|&ch| ch == 'c') {
+                    // If 'c' is the last char, next arg is the value
+                    if pos == chars.len() - 1 {
+                        return iter.next().cloned();
+                    }
+                    // Otherwise, rest after 'c' is the value
+                    let rest: String = chars[pos + 1..].iter().collect();
+                    if !rest.is_empty() {
+                        return Some(rest);
+                    }
+                }
+            }
+        }
+        // Fall back to default config path
+        self.default_config.clone()
+    }
+
+    /// Load config file, returns None if file doesn't exist (when using default)
+    fn load_config_file(&self, path: Option<&str>) -> Result<Option<Table>> {
+        match path {
+            Some(p) => {
+                // Explicit path provided - error if not found
+                if self.default_config.as_deref() == Some(p) && !std::path::Path::new(p).exists() {
+                    // Default config doesn't exist - that's OK
+                    Ok(None)
+                } else {
+                    // Explicit -c/--config or default exists - load it
+                    Ok(Some(stoml::parse_file(p)?))
+                }
+            }
+            None => Ok(None),
+        }
     }
 
     /// Format help message
@@ -379,7 +499,7 @@ impl Args {
                         .as_deref()
                         .unwrap_or(&arg.name)
                         .to_uppercase();
-                    line.push_str(&format!("  <{}>", vname));
+                    line.push_str(&format!(" <{}>", vname));
                 }
 
                 // Pad for alignment
@@ -466,7 +586,6 @@ impl Matches {
                 self.values.insert(arg.name.clone(), default.clone());
             }
         }
-
         self
     }
 
@@ -510,7 +629,7 @@ impl Matches {
             .unwrap_or_else(|| default.to_string())
     }
 
-    /// Get an integert value
+    /// Get an integer value
     pub fn get_integer(&self, name: &str) -> Option<i64> {
         self.values.get(name).and_then(|v| v.as_integer())
     }
@@ -598,7 +717,6 @@ impl Matches {
                 }
             }
         }
-
         table
     }
 }

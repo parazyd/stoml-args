@@ -1,4 +1,4 @@
-use stoml_args::{arg, args, ArgType};
+use stoml_args::{ArgType, arg, args};
 
 fn main() {
     // Define all arguments with their full configuration
@@ -67,51 +67,25 @@ fn main() {
             .help("TLS private key path")
             .toml_key("tls.key")
             .value_name("PATH"),
-        // Config file itself
-        arg("config")
-            .short('c')
-            .long("config")
-            .help("Path to configuration file")
-            .value_name("FILE"),
     ];
 
-    // Build the parser
+    // Build the parser with automatic config file support
+    // This adds -c/--config and loads the TOML automatically
     let parser = args("myserver")
         .version("1.0.0")
-        .about("A demonstration web server with layered configuration");
+        .about("A demonstration web server with layered configuration")
+        .config_arg_default("config.toml");
 
     // Add all arguments
     let parser = arg_defs.iter().fold(parser, |p, a| p.arg(a.clone()));
 
-    // Parse command line
+    // Parse command line - TOML is loaded and merged automatically!
     let matches = match parser.parse() {
         Ok(m) => m,
         Err(e) => e.exit(),
     };
 
-    // Get config file path (if specified on CLI)
-    let config_path = matches.get_string("config").map(|s| s.to_string());
-
-    // Apply configuration layers: CLI -> TOML -> Defaults
-    let matches = if let Some(path) = config_path {
-        match matches.with_toml_file(&path) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("error: failed to load config: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        // Try default config locations
-        match matches.with_toml_file_optional("./config.toml") {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("warning: error reading config.toml: {}", e);
-                std::process::exit(1);
-            }
-        }
-    };
-
+    // Apply defaults for any remaining unset values
     let matches = matches.with_defaults(&arg_defs);
 
     // Now use the values
@@ -126,6 +100,9 @@ fn main() {
     // Print configuration
     if !quiet {
         println!("Server Configuration:");
+        if let Some(config) = matches.get_string("config") {
+            println!("  Config file: {}", config);
+        }
         println!("  Host: {}", host);
         println!("  Port: {}", port);
         println!("  Workers: {}", workers);

@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::iter::Peekable;
-use std::vec::IntoIter;
 
 use stoml::{Array, Value};
 
-use crate::{Arg, ArgType, Error, Matches, Result};
+use crate::error::{Error, Result};
+use crate::{Arg, ArgType, Matches};
 
 /// Internal argument parser
 pub struct ArgParser<'a> {
@@ -172,7 +171,7 @@ impl<'a> ArgParser<'a> {
         &self,
         idx: usize,
         inline_value: Option<&str>,
-        args_iter: &mut Peekable<IntoIter<String>>,
+        args_iter: &mut std::iter::Peekable<std::vec::IntoIter<String>>,
         matches: &mut Matches,
     ) -> Result<()> {
         let arg_def = &self.args[idx];
@@ -181,8 +180,7 @@ impl<'a> ArgParser<'a> {
             ArgType::Bool => {
                 if let Some(inline_val) = inline_value {
                     // --flag=value for bool - parse the value
-                    let val = inline_val;
-                    let lower = val.to_lowercase();
+                    let lower = inline_val.to_lowercase();
                     let b = lower == "true" || lower == "1" || lower == "yes";
                     matches
                         .values
@@ -279,7 +277,7 @@ impl<'a> ArgParser<'a> {
                 }
             }
             _ => {
-                // Non-arrays: check for duplicates unless it's a count
+                // Non-arrays: check for duplicates (unless it's a count)
                 if matches.values.contains_key(&arg_def.name) && arg_def.arg_type != ArgType::Count
                 {
                     return Err(Error::DuplicateValue {
