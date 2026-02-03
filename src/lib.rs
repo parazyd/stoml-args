@@ -59,7 +59,7 @@ pub struct Arg {
 impl Arg {
     /// Create a new argument with the given name
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
+        Arg {
             name: name.into(),
             short: None,
             long: None,
@@ -77,7 +77,7 @@ impl Arg {
 
     /// Create a new positional argument
     pub fn positional(name: impl Into<String>) -> Self {
-        Self {
+        Arg {
             name: name.into(),
             short: None,
             long: None,
@@ -194,12 +194,16 @@ pub struct Args {
     auto_config: bool,
     /// Default config file path (used if -c/--config not provided)
     default_config: Option<String>,
+    /// Default config content (written if config file doesn't exist)
+    config_template: Option<String>,
+    /// Whether config file is required
+    config_required: bool,
 }
 
 impl Args {
     /// Create a new argument parser with the given program name
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
+        Args {
             name: name.into(),
             version: None,
             about: None,
@@ -209,6 +213,8 @@ impl Args {
             auto_version: true,
             auto_config: false,
             default_config: None,
+            config_template: None,
+            config_required: false,
         }
     }
 
@@ -283,6 +289,48 @@ impl Args {
         self
     }
 
+    /// Set the default config content to write if config file doesn't exist
+    ///
+    /// When the resolved config path doesn't exist, this content will be
+    /// written to create the file before loading.
+    ///
+    /// # Example
+    /// ```ignore
+    /// const DEFAULT_CONFIG: &str = r#"
+    /// [server]
+    /// port = 8080
+    /// "#;
+    ///
+    /// let matches = args("myapp")
+    ///     .config_arg_default("config.toml")
+    ///     .config_template(DEFAULT_CONFIG)
+    ///     .parse()?;
+    /// // If config.toml doesn't exist, it's created with DEFAULT_CONFIG
+    /// ```
+    pub fn config_template(mut self, content: impl Into<String>) -> Self {
+        self.config_template = Some(content.into());
+        self
+    }
+
+    /// Set whether the config file is required
+    ///
+    /// If `true` and no config file exists (and no template is provided),
+    /// parsing will fail with an error.
+    ///
+    /// Default is `false` (config is optional).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let matches = args("myapp")
+    ///     .config_arg_default("config.toml")
+    ///     .config_required(true)  // Error if config.toml doesn't exist
+    ///     .parse()?;
+    /// ```
+    pub fn config_required(mut self, required: bool) -> Self {
+        self.config_required = required;
+        self
+    }
+
     /// Parse arguments from the command line
     pub fn parse(self) -> Result<Matches> {
         self.parse_from(env::args().skip(1).collect())
@@ -293,7 +341,7 @@ impl Args {
         // Pre-scan for config file if auto_config is enabled
         let config_table = if self.auto_config {
             let config_path = self.extract_config_path(&args);
-            self.load_config_file(config_path.as_deref())?
+            self.load_or_create_config(config_path.as_deref())?
         } else {
             None
         };
@@ -405,20 +453,43 @@ impl Args {
         self.default_config.clone()
     }
 
-    /// Load config file, returns None if file doesn't exist (when using default)
-    fn load_config_file(&self, path: Option<&str>) -> Result<Option<Table>> {
+    /// Load config file, creating it from template if needed
+    fn load_or_create_config(&self, path: Option<&str>) -> Result<Option<Table>> {
         match path {
             Some(p) => {
-                // Explicit path provided - error if not found
-                if self.default_config.as_deref() == Some(p) && !std::path::Path::new(p).exists() {
-                    // Default config doesn't exist - that's OK
-                    Ok(None)
+                let path_exists = Path::new(p).exists();
+
+                // If file doesn't exist, try to create from template
+                if !path_exists {
+                    if let Some(template) = &self.config_template {
+                        // Write template to create the config file
+                        std::fs::write(p, template)?;
+                        // Now load it
+                        return Ok(Some(stoml::parse_file(p)?));
+                    } else if self.config_required {
+                        // No template and config is required - error
+                        return Err(Error::MissingConfig {
+                            path: p.to_string(),
+                        });
+                    } else {
+                        // No template, not required, file doesn't exist - that's OK
+                        return Ok(None);
+                    }
+                }
+
+                // File exists - load it
+                Ok(Some(stoml::parse_file(p)?))
+            }
+            None => {
+                // No path at all
+                if self.config_required {
+                    Err(Error::MissingConfig {
+                        path: "<none>".to_string(),
+                    })
                 } else {
-                    // Explicit -c/--config or default exists - load it
-                    Ok(Some(stoml::parse_file(p)?))
+                    Ok(None)
                 }
             }
-            None => Ok(None),
         }
     }
 
@@ -513,10 +584,9 @@ impl Args {
 
                 // Default value
                 if let Some(d) = &arg.default
-                    && !matches!(d, Value::Boolean(false) | Value::Integer(0))
-                {
-                    line.push_str(&format!(" [default: {}]", d));
-                }
+                    && !matches!(d, Value::Boolean(false) | Value::Integer(0)) {
+                        line.push_str(&format!(" [default: {}]", d));
+                    }
 
                 help.push_str(&line);
                 help.push('\n');
@@ -549,7 +619,7 @@ pub struct Matches {
 
 impl Matches {
     pub(crate) fn new() -> Self {
-        Self {
+        Matches {
             values: HashMap::new(),
             program_name: String::new(),
             remaining: Vec::new(),
@@ -581,10 +651,9 @@ impl Matches {
     pub fn with_defaults(mut self, args: &[Arg]) -> Self {
         for arg in args {
             if !self.values.contains_key(&arg.name)
-                && let Some(default) = &arg.default
-            {
-                self.values.insert(arg.name.clone(), default.clone());
-            }
+                && let Some(default) = &arg.default {
+                    self.values.insert(arg.name.clone(), default.clone());
+                }
         }
         self
     }

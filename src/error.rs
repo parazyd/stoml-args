@@ -31,6 +31,9 @@ pub enum Error {
     /// Too many positional arguments
     TooManyPositional { max: usize, got: usize },
 
+    /// Required config file is missing
+    MissingConfig { path: String },
+
     /// Help was requested
     Help(String),
 
@@ -83,6 +86,9 @@ impl fmt::Display for Error {
                     "too many positional arguments: expected at most {}, got {}",
                     max, got
                 )
+            }
+            Error::MissingConfig { path } => {
+                write!(f, "required config file '{}' not found", path)
             }
             Error::Help(msg) => write!(f, "{}", msg),
             Error::Version(msg) => write!(f, "{}", msg),

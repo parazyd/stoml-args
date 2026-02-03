@@ -39,7 +39,7 @@ impl<'a> ArgParser<'a> {
         // Sort positionals by their position
         positionals.sort_by_key(|&i| args[i].position);
 
-        Self {
+        ArgParser {
             short_map,
             long_map,
             positionals,
@@ -70,16 +70,15 @@ impl<'a> ArgParser<'a> {
             if let Some(rest) = arg.strip_prefix("--") {
                 // Check for --no-flag syntax
                 if let Some(flag_name) = rest.strip_prefix("no-")
-                    && let Some(&idx) = self.long_map.get(flag_name)
-                {
-                    let arg_def = &self.args[idx];
-                    if arg_def.arg_type == ArgType::Bool {
-                        matches
-                            .values
-                            .insert(arg_def.name.clone(), Value::Boolean(false));
-                        continue;
+                    && let Some(&idx) = self.long_map.get(flag_name) {
+                        let arg_def = &self.args[idx];
+                        if arg_def.arg_type == ArgType::Bool {
+                            matches
+                                .values
+                                .insert(arg_def.name.clone(), Value::Boolean(false));
+                            continue;
+                        }
                     }
-                }
 
                 // Check for --flag=value syntax
                 let (flag_name, inline_value) = if let Some(pos) = rest.find('=') {

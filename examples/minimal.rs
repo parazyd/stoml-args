@@ -1,4 +1,10 @@
-use stoml_args::{ArgType, arg, args, pos};
+use stoml_args::{arg, args, pos, ArgType};
+
+const DEFAULT_CONFIG: &str = r#"
+output = "out.txt"
+verbose = false
+count = 10
+"#;
 
 fn main() {
     // Define arguments
@@ -29,6 +35,7 @@ fn main() {
         .version("0.1.0")
         .about("A minimal example")
         .config_arg_default("config.toml")
+        .config_template(DEFAULT_CONFIG)
         .arg(arg_defs[0].clone())
         .arg(arg_defs[1].clone())
         .arg(arg_defs[2].clone())
@@ -37,6 +44,7 @@ fn main() {
         .unwrap_or_else(|e| e.exit())
         .with_defaults(&arg_defs);
 
+    // Use values - config is auto-created if missing
     let input = matches.get_string("input").unwrap();
     let output = matches.get_string("output").unwrap();
     let verbose = matches.get_bool("verbose");

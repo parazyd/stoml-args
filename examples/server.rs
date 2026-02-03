@@ -1,4 +1,23 @@
-use stoml_args::{ArgType, arg, args};
+use stoml_args::{arg, args, ArgType};
+
+const DEFAULT_CONFIG: &str = r#"# Server Configuration
+# Auto-generated default config. Edit as needed.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+workers = 4
+
+[logging]
+file = "server.log"
+
+[tls]
+enabled = false
+# cert = "/path/to/cert.pem"
+# key = "/path/to/key.pem"
+
+# features = ["metrics", "tracing"]
+"#;
 
 fn main() {
     // Define all arguments with their full configuration
@@ -69,17 +88,17 @@ fn main() {
             .value_name("PATH"),
     ];
 
-    // Build the parser with automatic config file support
-    // This adds -c/--config and loads the TOML automatically
+    // Build the parser with automatic config handling
     let parser = args("myserver")
         .version("1.0.0")
         .about("A demonstration web server with layered configuration")
-        .config_arg_default("config.toml");
+        .config_arg_default("config.toml") // -c/--config, defaults to config.toml
+        .config_template(DEFAULT_CONFIG); // Create with this content if missing
 
     // Add all arguments
     let parser = arg_defs.iter().fold(parser, |p, a| p.arg(a.clone()));
 
-    // Parse command line - TOML is loaded and merged automatically!
+    // Parse - config is auto-created if missing!
     let matches = match parser.parse() {
         Ok(m) => m,
         Err(e) => e.exit(),

@@ -2,17 +2,18 @@ stoml-args
 ==========
 
 A lightweight CLI argument parser for Rust with seamless TOML configuration
-support. Zero external dependencies beyond [`stoml`](https://github.com/parazyd/stoml)
+support. Zero external dependencies beyond [`stoml`](https://github.com/parazyd/stoml).
 
-Documentation on [docs.rs](https://docs.rs/stoml-args).
+[Documentation](https://docs.rs/stoml-args)
 
 ## Features
 
 - **Layered Configuration**: CLI args → TOML config → Defaults
-- **Config Loading**: Built-in `-c`/`--config` flag with pre-parsing
+- **Config Loading**: Built-in `-c`/`--config` flag
+- **Config Templates**: Auto-create default config if missing
 - **Type-safe**: Integer, Float, String, Boolean, Array, and Count types
 - **Optional Args**: Support for truly optional arguments (no default, returns `None`)
-- **Flexible Flags**: Short (`-v`), long (`--verbose`), combined (`-vvv`), with values (`-o file`, `-ofile`, `--output=file`)
+- **Flexible Flags**: Short (`-v`), long (`--verbose`), combined (`-vvv`), with values
 - **Positional Arguments**: Required, optional, and variadic
 - **Auto-generated Help**: `--help` and `--version` flags
 
@@ -20,6 +21,12 @@ Documentation on [docs.rs](https://docs.rs/stoml-args).
 
 ```rust
 use stoml_args::{args, arg, ArgType};
+
+const DEFAULT_CONFIG: &str = r#"
+[server]
+port = 8080
+host = "0.0.0.0"
+"#;
 
 fn main() {
     let arg_defs = vec![
@@ -29,46 +36,50 @@ fn main() {
             .arg_type(ArgType::Integer)
             .default(8080i64)
             .toml_key("server.port"),
-        arg("verbose")
-            .short('v')
-            .flag(),
+        arg("host")
+            .long("host")
+            .default("0.0.0.0")
+            .toml_key("server.host"),
     ];
 
     let matches = args("myapp")
         .version("1.0.0")
-        .config_arg_default("config.toml")  // Auto -c/--config
+        .config_arg_default("config.toml")  // -c/--config, default path
+        .config_template(DEFAULT_CONFIG)    // Create if missing
         .arg(arg_defs[0].clone())
         .arg(arg_defs[1].clone())
         .parse()
         .unwrap_or_else(|e| e.exit())
         .with_defaults(&arg_defs);
 
-    // TOML is automatically loaded and merged
-    let port = matches.get_integer("port").unwrap();
-    println!("Port: {}", port);
+    // Config is auto-created if missing, then loaded
+    // CLI args override TOML values
+    println!("Port: {}", matches.get_integer("port").unwrap());
 }
 ```
 
-## Automatic Config File Loading
+## Automatic Config File Handling
 
-Config files are handled automatically with pre-parsing:
+The parser handles config files automatically:
 
 ```rust
-let matches = args("myapp")
-    .config_arg()                        // Adds -c/--config flag
+args("myapp")
+    .config_arg()                        // Just adds -c/--config flag
     // OR
-    .config_arg_default("config.toml")   // Also tries config.toml if -c not given
-    .arg(arg("port").toml_key("port"))
+    .config_arg_default("config.toml")   // Also sets default path
+    .config_template(TOML_CONTENT)       // Write this if file missing
+    .config_required(true)               // Error if no config exists
     .parse()?;
-
-// TOML is loaded. CLI values override TOML values.
 ```
 
-**How it works:**
-1. Before full parsing, `-c`/`--config` is extracted
-2. The TOML file is loaded
-3. Full argument parsing happens
-4. TOML values fill in any gaps (CLI takes precedence)
+**Behavior:**
+
+| Scenario | `config_template` set | `config_required` | Result |
+|----------|----------------------|-------------------|--------|
+| File exists | - | - | Load it |
+| File missing | Yes | - | Create from template, load it |
+| File missing | No | false (default) | Continue without config |
+| File missing | No | true | Error: MissingConfig |
 
 **Supported formats:**
 ```bash
@@ -78,35 +89,19 @@ myapp --config config.toml
 myapp --config=config.toml
 ```
 
-## Layered Configuration (Manual)
-
-If you need more control, you can still load TOML manually:
-
-```rust
-let arg_defs = vec![
-    arg("host")
-        .long("host")
-        .default("0.0.0.0")
-        .toml_key("server.host"),
-    arg("port")
-        .short('p')
-        .arg_type(ArgType::Integer)
-        .default(8080i64)
-        .toml_key("server.port"),
-];
-
-let matches = args("server")
-    .arg(arg_defs[0].clone())
-    .arg(arg_defs[1].clone())
-    .parse()?
-    .with_toml_file_optional("config.toml")?
-    .with_defaults(&arg_defs);
-```
+## Layered Configuration
 
 Priority order (highest to lowest):
 1. CLI arguments
 2. TOML configuration
 3. Defaults
+
+```rust
+// config.toml has: port = 3000
+// User runs: myapp -p 8080
+
+matches.get_integer("port")  // Returns 8080 (CLI wins)
+```
 
 ## Argument Types
 
@@ -116,7 +111,7 @@ Priority order (highest to lowest):
 arg("verbose")
     .short('v')
     .long("verbose")
-    .flag()  // Sets type to Bool with default false
+    .flag()  // Bool with default false
 ```
 
 Supports `--no-verbose` to explicitly set false.
@@ -141,7 +136,7 @@ arg("port").arg_type(ArgType::Integer)
 // Float
 arg("rate").arg_type(ArgType::Float)
 
-// Array (can be specified multiple times)
+// Array (can be repeated)
 arg("include")
     .short('I')
     .arg_type(ArgType::Array)
@@ -150,11 +145,9 @@ arg("include")
 
 ### Optional Arguments Without Defaults
 
-Arguments are optional by default. If not provided and no default is set, getter methods return `None`:
-
 ```rust
 let matches = args("myapp")
-    .arg(arg("output").short('o').optional())  // explicit
+    .arg(arg("output").short('o').optional())
     .parse()?;
 
 // Returns None if not provided
@@ -162,10 +155,10 @@ if let Some(output) = matches.get_string("output") {
     println!("Output: {}", output);
 }
 
-// For optional booleans, use get_bool_opt()
+// For optional booleans
 match matches.get_bool_opt("debug") {
-    Some(true) => println!("Debug enabled"),
-    Some(false) => println!("Debug disabled"),
+    Some(true) => println!("Debug on"),
+    Some(false) => println!("Debug off"),
     None => println!("Debug not specified"),
 }
 ```
@@ -178,27 +171,10 @@ use stoml_args::pos;
 args("cp")
     .arg(pos("source").required())
     .arg(pos("dest").required())
-    .arg(pos("extras").variadic())  // Collects remaining args
+    .arg(pos("extras").variadic())
 ```
 
 ## API Reference
-
-### Arg Builder Methods
-
-| Method | Description |
-|--------|-------------|
-| `short(c)` | Set short flag (e.g., `'v'` for `-v`) |
-| `long(s)` | Set long flag (e.g., `"verbose"` for `--verbose`) |
-| `arg_type(t)` | Set value type (`String`, `Integer`, `Float`, `Bool`, `Array`, `Count`) |
-| `flag()` | Shorthand for boolean flag (default: false) |
-| `count()` | Shorthand for count flag (default: 0) |
-| `default(v)` | Set default value |
-| `required()` | Mark as required |
-| `optional()` | Mark as optional with no default (explicit) |
-| `help(s)` | Set help description |
-| `toml_key(s)` | Set TOML key path (e.g., `"server.port"`) |
-| `value_name(s)` | Set placeholder in help (e.g., `"FILE"`) |
-| `variadic()` | Accept multiple values (positional only) |
 
 ### Args Builder Methods
 
@@ -210,60 +186,50 @@ args("cp")
 | `arg(a)` | Add an argument |
 | `config_arg()` | Enable `-c`/`--config` flag |
 | `config_arg_default(path)` | Enable config flag with default path |
+| `config_template(content)` | TOML to write if config missing |
+| `config_required(bool)` | Error if no config (default: false) |
 | `disable_help()` | Disable auto `--help` |
 | `disable_version()` | Disable auto `--version` |
 | `parse()` | Parse from `std::env::args()` |
 | `parse_from(args)` | Parse from custom args |
 
+### Arg Builder Methods
+
+| Method | Description |
+|--------|-------------|
+| `short(c)` | Short flag (`'v'` for `-v`) |
+| `long(s)` | Long flag (`"verbose"` for `--verbose`) |
+| `arg_type(t)` | Value type (`String`, `Integer`, `Float`, `Bool`, `Array`, `Count`) |
+| `flag()` | Boolean flag (default: false) |
+| `count()` | Count flag (default: 0) |
+| `default(v)` | Default value |
+| `required()` | Mark as required |
+| `optional()` | Mark as optional (explicit) |
+| `help(s)` | Help description |
+| `toml_key(s)` | TOML key path (`"server.port"`) |
+| `value_name(s)` | Help placeholder (`"FILE"`) |
+| `variadic()` | Accept multiple values (positional only) |
+
 ### Matches Methods
 
 | Method | Description |
 |--------|-------------|
-| `get(name)` | Get `Option<&Value>` |
-| `get_string(name)` | Get `Option<&str>` |
-| `get_integer(name)` | Get `Option<i64>` |
-| `get_float(name)` | Get `Option<f64>` |
-| `get_bool(name)` | Get `bool` (defaults to `false`) |
-| `get_bool_opt(name)` | Get `Option<bool>` (truly optional) |
-| `get_array(name)` | Get `Option<&Array>` |
-| `get_count(name)` | Get `i64` (defaults to `0`) |
-| `get_count_opt(name)` | Get `Option<i64>` (truly optional) |
-| `contains(name)` | Check if argument was provided |
-| `with_toml(table)` | Merge TOML table (CLI takes precedence) |
-| `with_toml_file(path)` | Load and merge TOML file |
-| `with_toml_file_optional(path)` | Load TOML file if it exists |
-| `with_defaults(args)` | Apply default values |
-| `remaining()` | Get args after `--` |
+| `get(name)` | `Option<&Value>` |
+| `get_string(name)` | `Option<&str>` |
+| `get_integer(name)` | `Option<i64>` |
+| `get_float(name)` | `Option<f64>` |
+| `get_bool(name)` | `bool` (default: false) |
+| `get_bool_opt(name)` | `Option<bool>` |
+| `get_array(name)` | `Option<&Array>` |
+| `get_count(name)` | `i64` (default: 0) |
+| `get_count_opt(name)` | `Option<i64>` |
+| `contains(name)` | Check if provided |
+| `with_toml(table)` | Merge TOML table |
+| `with_toml_file(path)` | Load and merge TOML |
+| `with_toml_file_optional(path)` | Load if exists |
+| `with_defaults(args)` | Apply defaults |
+| `remaining()` | Args after `--` |
 | `to_table()` | Convert to `stoml::Table` |
-
-## Flag Formats Supported
-
-```bash
-# Boolean flags
--v                  # short
---verbose           # long
---no-verbose        # negation
-
-# Value flags
--o file             # short with space
--ofile              # short attached
---output file       # long with space
---output=file       # long with equals
-
-# Combined short flags
--abc                # same as -a -b -c
--vvv                # count: 3
-
-# Config file
--c config.toml      # short
---config=config.toml # long with equals
-
-# Positional
-myapp input.txt output.txt
-
-# Stop parsing
-myapp --flag -- -not-a-flag
-```
 
 ## Error Handling
 
@@ -273,7 +239,7 @@ let matches = args("myapp")
     .parse();
 
 match matches {
-    Ok(m) => { /* use matches */ }
+    Ok(m) => { /* use m */ }
     Err(e) if e.is_help() => {
         println!("{}", e);
         std::process::exit(0);
